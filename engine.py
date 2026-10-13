@@ -29,61 +29,123 @@ def render_upload(data, name):
     return [image]
 
 def analyze(image):
+    """Propose complete local glyphs, never isolated pieces of staff rules.
+
+    These are conservative *review candidates*, not automatic music readings.
+    A missed symbol can always be boxed manually in the browser.
+    """
     gray=np.array(image.convert('L'))
     h,w=gray.shape
     bw=cv2.threshold(gray,0,255,cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)[1]
-    # Horizontal line concentration identifies possible staves. Do not claim 100% detection.
-    horizontal=cv2.morphologyEx(bw,cv2.MORPH_OPEN,cv2.getStructuringElement(cv2.MORPH_RECT,(max(15,w//35),1)))
-    hits=np.count_nonzero(horizontal,axis=1)
-    ys=np.flatnonzero(hits>max(25,w*0.11))
-    lines=[]
-    for y in ys:
-        if not lines or y>lines[-1][-1]+1: lines.append([int(y)])
-        else: lines[-1].append(int(y))
-    mid=[int(np.median(cluster)) for cluster in lines]
-    staves=[]; i=0
+    horizontal=cv2.morphologyEx(bw,cv2.MORPH_OPEN,cv2.getStructuringElement(cv2.MORPH_RECT,(max(18,w//32),1)))
+    row_strength=np.count_nonzero(horizontal,axis=1)
+    runs=[]
+    for y in np.flatnonzero(row_strength>max(30,w*.13)):
+        if not runs or y>runs[-1][-1]+1:runs.append([int(y)])
+        else:runs[-1].append(int(y))
+    mid=[int(np.median(run)) for run in runs]
+    staves=[];i=0
     while i+4<len(mid):
-        group=mid[i:i+5]
-        diffs=np.diff(group)
-        if min(diffs)>=5 and max(diffs)<=44 and max(diffs)-min(diffs)<=max(3,np.median(diffs)*0.34):
-            staves.append({'lines':group,'spacing':float(np.median(diffs))})
-            i+=5
+        group=mid[i:i+5];d=np.diff(group)
+        if min(d)>=5 and max(d)<=48 and max(d)-min(d)<=max(3,np.median(d)*.32):
+            staves.append({'lines':group,'spacing':float(np.median(d))});i+=5
         else:i+=1
-    # Connected components after staff-line suppression: candidates, NOT definitive symbols.
-    without=cv2.subtract(bw,horizontal)
-    n,lab,stats,centroids=cv2.connectedComponentsWithStats(without)
-    candidates=[]
-    for j in range(1,n):
-        x,y,ww,hh,area=map(int,stats[j]);cx,cy=centroids[j]
-        if area<7 or ww<2 or hh<2 or ww>min(145,w*0.25) or hh>min(150,h*0.20):continue
-        staff_idx=-1
+    spacing0=float(np.median([s['spacing'] for s in staves])) if staves else 12.
+    # Split staff lines ONLY where long horizontal runs are present. Short vertical
+    # stems and letter strokes remain; reconnect narrow interruptions below.
+    removed=cv2.subtract(bw,horizontal)
+    k=max(3,min(5,int(round(spacing0*.22))|1))
+    joined=cv2.morphologyEx(removed,cv2.MORPH_CLOSE,cv2.getStructuringElement(cv2.MORPH_RECT,(k,k)))
+    count,_,stats,_=cv2.connectedComponentsWithStats(joined)
+    components=[]
+    for j in range(1,count):
+        x,y,ww,hh,area=map(int,stats[j]);cx=x+ww/2;cy=y+hh/2
+        if area<max(5,spacing0*.26) or ww<2 or hh<2:continue
+        if ww>max(65,spacing0*6) or hh>max(85,spacing0*9):continue
+        # Residual horizontal / vertical hairlines are never stand-alone glyphs.
+        if ww>spacing0*1.35 and hh<max(3,spacing0*.28):continue
+        if hh>spacing0*2.7 and ww<max(2,spacing0*.18):continue
+        idx=-1
         if staves:
-            ds=[max(0,abs(cy-(s['lines'][0]+s['lines'][-1])/2)-s['spacing']*2) for s in staves]
-            staff_idx=int(np.argmin(ds))
-            if ds[staff_idx]>staves[staff_idx]['spacing']*5:staff_idx=-1
-        # Slight expansion so user sees shape, including staff in crop.
-        # Initial categories are queue hints only, never assertions of meaning.
-        spacing=staves[staff_idx]['spacing'] if staff_idx>=0 else 13
-        if staff_idx<0: hint='letters'
-        elif hh>spacing*2.5 and ww<spacing*.65: hint='barlines'
-        elif ww>spacing*1.6 and hh<spacing*.65: hint='letters'
-        elif .4*spacing<=ww<=2.4*spacing and .3*spacing<=hh<=2*spacing:hint='noteheads'
-        else:hint='rests'
-        candidates.append({'id':f'c{j}','box':[max(0,x-4),max(0,y-4),min(w-x+4,ww+8),min(h-y+4,hh+8)],'staff':staff_idx,'stage':hint,'status':'unreviewed'})
-    # Vertical line proposal pass: staff fragments removed from consideration; long near-vertical
-    # lines are barline candidates. Bounding boxes are not accepted without user confirmation.
-    vertical=cv2.morphologyEx(bw,cv2.MORPH_OPEN,cv2.getStructuringElement(cv2.MORPH_RECT,(1,max(12,int(np.median([s['spacing'] for s in staves]) * 3) if staves else 28))))
-    vn,_,vstats,_=cv2.connectedComponentsWithStats(vertical)
+            offsets=[max(0,s['lines'][0]-cy,cy-s['lines'][-1]) for s in staves]
+            closest=int(np.argmin(offsets))
+            if offsets[closest]<=staves[closest]['spacing']*3.4:idx=closest
+        components.append((x,y,x+ww,y+hh,area,idx))
+    # Recombine pieces in *local* glyph-scale neighborhoods. Two noteheads at
+    # separate horizontal positions may never be merged into a chord by proximity.
+    # Text is not joined into a full title: one printed character is one glyph.
+    groups=[]
+    for comp in sorted(components,key=lambda c:(c[5],c[0],c[1])):
+        x1,y1,x2,y2,area,staff=comp
+        assigned=None;best=1e9
+        for group in groups:
+            if group['staff']!=staff:continue
+            gx1,gy1,gx2,gy2=group['bounds']
+            dx=max(0,gx1-x2,x1-gx2);dy=max(0,gy1-y2,y1-gy2)
+            horizontal_overlap=max(0,min(gx2,x2)-max(gx1,x1))
+            # Prefer vertically separated pieces sharing the same x (i-dot,
+            # separated glyph strokes); permit very small cuts through staves.
+            if dx>spacing0*.16 or dy>spacing0*.36:continue
+            if not (horizontal_overlap>0 or dx<=spacing0*.08):continue
+            xx1=min(gx1,x1); yy1=min(gy1,y1);xx2=max(gx2,x2);yy2=max(gy2,y2)
+            if xx2-xx1>spacing0*3.1 or yy2-yy1>spacing0*6.5:continue
+            d=dx+dy
+            if d<best:best=d;assigned=group
+        if assigned is None:groups.append({'bounds':[x1,y1,x2,y2],'staff':staff,'ink':area,'fragments':1})
+        else:
+            old=assigned['bounds'];assigned['bounds']=[min(old[0],x1),min(old[1],y1),max(old[2],x2),max(old[3],y2)]
+            assigned['ink']+=area;assigned['fragments']+=1
+    proposals=[]
+    for group in groups:
+        x,y,x2,y2=group['bounds'];ww=x2-x;hh=y2-y;idx=group['staff']
+        spacing=staves[idx]['spacing'] if idx>=0 else spacing0
+        if group['ink']<max(7,spacing*.40):continue
+        if ww>spacing*1.35 and hh<spacing*.4:continue
+        if hh>spacing*3.2 and ww<spacing*.23:continue
+        # Limit candidate proposal to plausible symbol sizes. Small pieces of
+        # staff ruling should not be presented as a separate training symbol.
+        if idx>=0:
+            if ww<spacing*.28 or hh<spacing*.35:continue
+            if ww<spacing*.60 and hh<spacing*.60 and group['ink']<spacing*1.2:continue
+            if hh>=spacing*2.7 and ww<=spacing*.55:stage='barlines'
+            elif ww>=spacing*1.55 and hh<=spacing*.73:stage='rests'
+            elif ww<=spacing*2.9 and hh<=spacing*5.8:stage='noteheads'
+            else:stage='rests'
+        else:
+            # The five-pass letter review only needs plausible text character
+            # shapes, not every isolated dot or scanning artifact.
+            if not (spacing*.42<=ww<=spacing*2.7 and spacing*.62<=hh<=spacing*3.9):continue
+            stage='letters'
+        pad=max(3,int(spacing*.25))
+        proposals.append({'box':[max(0,x-pad),max(0,y-pad),min(w,x2+pad)-max(0,x-pad),min(h,y2+pad)-max(0,y-pad)],'staff':idx,'stage':stage,'status':'unreviewed','fragments':group['fragments']})
+    # Detect actual barlines from the ORIGINAL picture, not from disconnected
+    # pieces. Keep only strokes that cross almost the whole five-line staff.
+    vertical=cv2.morphologyEx(bw,cv2.MORPH_OPEN,cv2.getStructuringElement(cv2.MORPH_RECT,(1,max(13,int(spacing0*3.25)))))
+    vn,_,vs,_=cv2.connectedComponentsWithStats(vertical)
     for j in range(1,vn):
-        x,y,ww,hh,area=map(int,vstats[j])
-        if not (2<=hh and ww<=max(7,w//150) and hh>=22):continue
-        idx=next((i for i,s in enumerate(staves) if y<=s['lines'][-1]+s['spacing'] and y+hh>=s['lines'][0]-s['spacing']),-1)
-        if idx<0:continue
-        if any(abs(c['box'][0]-x)<5 and abs(c['box'][1]-y)<8 for c in candidates):continue
-        candidates.append({'id':f'b{j}','box':[max(0,x-3),max(0,y-3),ww+6,hh+6],'staff':idx,'stage':'barlines','status':'unreviewed'})
-    # Avoid hundreds of fragments from letters and page furniture; expose manual boxes.
-    candidates=sorted(candidates,key=lambda a:(a['staff']<0,a['box'][1],a['box'][0]))[:1400]
-    return {'width':w,'height':h,'staves':staves,'candidates':candidates,'warning':'Detections are candidates, not a complete or correct musical transcription. Add missing symbols manually.'}
+        x,y,ww,hh,area=map(int,vs[j])
+        if ww>max(5,spacing0*.4):continue
+        for idx,staff in enumerate(staves):
+            top,bottom=staff['lines'][0],staff['lines'][-1]
+            if y>top+staff['spacing']*.35 or y+hh<bottom-staff['spacing']*.35:continue
+            box=[max(0,x-3),max(0,top-3),min(w,x+ww+3)-max(0,x-3),bottom-top+6]
+            proposals.append({'box':box,'staff':idx,'stage':'barlines','status':'unreviewed','fragments':1})
+    # De-duplicate nested candidates, particularly staff-line crossings. A
+    # proper barline takes precedence over a vertical fragment at its x location.
+    def iou(a,b):
+        x=max(a[0],b[0]);y=max(a[1],b[1]);xx=min(a[0]+a[2],b[0]+b[2]);yy=min(a[1]+a[3],b[1]+b[3])
+        inter=max(0,xx-x)*max(0,yy-y)
+        return inter/(a[2]*a[3]+b[2]*b[3]-inter+1e-9)
+    proposals.sort(key=lambda c:(c['stage']!='barlines',-(c['box'][2]*c['box'][3])))
+    kept=[]
+    for proposal in proposals:
+        if any(p['staff']==proposal['staff'] and (iou(p['box'],proposal['box'])>.40 or
+               (proposal['stage']=='barlines' and p['stage']=='barlines' and abs(p['box'][0]-proposal['box'][0])<spacing0*.35)) for p in kept):continue
+        kept.append(proposal)
+    kept.sort(key=lambda c:(c['staff']<0,c['box'][1],c['box'][0]))
+    for i,c in enumerate(kept):c['id']=f'c{i}'
+    return {'width':w,'height':h,'staves':staves,'candidates':kept[:1100],
+       'warning':'Only full-sized candidate glyphs are suggested. Some may be missed; use Draw missing symbol and proofread every staff.'}
 
 def verify(events):
     if not isinstance(events,list) or len(events)>10000:raise ValueError('Invalid symbol event list')

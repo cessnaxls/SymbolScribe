@@ -24,4 +24,29 @@ def test_image():
     a=analyze(im);assert a['width']==800;assert len(a['staves'])>=1
     f=io.BytesIO();im.save(f,format='PNG');assert len(render_upload(f.getvalue(),'test.png'))==1
     print('PASS: image input, detected staff coordinates')
-if __name__=='__main__':test_exports();test_image()
+
+def test_complete_glyphs():
+    im=Image.new('RGB',(900,270),'white');d=ImageDraw.Draw(im)
+    for y in (70,82,94,106,118):d.line((30,y,870,y),fill='black',width=1)
+    for x in (130,230):
+        d.ellipse((x,88,x+16,98),outline='black',width=2)
+        d.line((x+15,92,x+15,57),fill='black',width=2)
+    d.line((350,68,350,120),fill='black',width=2)
+    result=analyze(im)
+    for x in (130,230):
+        found=[c for c in result['candidates'] if c['box'][0]<=x<=c['box'][0]+c['box'][2] and c['box'][1]<=58 and c['box'][1]+c['box'][3]>=98]
+        assert len(found)==1, f'Expected one complete notehead+stem for x={x}, got {found}'
+    assert any(c['stage']=='barlines' for c in result['candidates'])
+    print('PASS: complete stemmed glyph candidates and barline pass')
+
+if __name__=='__main__':
+    test_exports();test_image();test_complete_glyphs()
+
+def test_no_staff_fragments():
+    im=Image.new('RGB',(1000,280),'white');d=ImageDraw.Draw(im)
+    for y in (85,100,115,130,145):d.line((20,y,980,y),fill='black',width=2)
+    result=analyze(im)
+    assert len(result['staves'])==1
+    # A completely empty ruled staff should not generate a box for every line.
+    assert len(result['candidates'])<=3, result['candidates']
+    print('PASS: empty staff not mistaken for multiple musical glyphs')
