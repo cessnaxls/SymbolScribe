@@ -9,7 +9,7 @@ from xml.etree import ElementTree as ET
 from reportlab.pdfgen.canvas import Canvas
 from reportlab.lib.pagesizes import A4
 
-LABELS={'quarter','eighth','16th','32nd','half','whole','breve','long','rest-quarter','rest-half','rest-whole','rest-eighth','sharp','flat','natural','clef-g','clef-f','clef-c','barline','dot','tie','other'}
+LABELS={'quarter','eighth','16th','32nd','half','whole','breve','long','rest-quarter','rest-half','rest-whole','rest-eighth','sharp','flat','natural','clef-g','clef-f','clef-c','barline','dot','tie','other','text-letter'}
 NOTE_DUR={'quarter':1,'eighth':0.5,'16th':0.25,'32nd':0.125,'half':2,'whole':4,'breve':8,'long':16}
 REST_DUR={'rest-quarter':1,'rest-half':2,'rest-whole':4,'rest-eighth':0.5}
 
@@ -35,7 +35,7 @@ def analyze(image):
     # Horizontal line concentration identifies possible staves. Do not claim 100% detection.
     horizontal=cv2.morphologyEx(bw,cv2.MORPH_OPEN,cv2.getStructuringElement(cv2.MORPH_RECT,(max(15,w//35),1)))
     hits=np.count_nonzero(horizontal,axis=1)
-    ys=np.flatnonzero(hits>max(35,w*0.19))
+    ys=np.flatnonzero(hits>max(25,w*0.11))
     lines=[]
     for y in ys:
         if not lines or y>lines[-1][-1]+1: lines.append([int(y)])
@@ -62,16 +62,34 @@ def analyze(image):
             staff_idx=int(np.argmin(ds))
             if ds[staff_idx]>staves[staff_idx]['spacing']*5:staff_idx=-1
         # Slight expansion so user sees shape, including staff in crop.
-        candidates.append({'id':f'c{j}','box':[max(0,x-4),max(0,y-4),min(w-x+4,ww+8),min(h-y+4,hh+8)],'staff':staff_idx,'status':'unreviewed'})
+        # Initial categories are queue hints only, never assertions of meaning.
+        spacing=staves[staff_idx]['spacing'] if staff_idx>=0 else 13
+        if staff_idx<0: hint='letters'
+        elif hh>spacing*2.5 and ww<spacing*.65: hint='barlines'
+        elif ww>spacing*1.6 and hh<spacing*.65: hint='letters'
+        elif .4*spacing<=ww<=2.4*spacing and .3*spacing<=hh<=2*spacing:hint='noteheads'
+        else:hint='rests'
+        candidates.append({'id':f'c{j}','box':[max(0,x-4),max(0,y-4),min(w-x+4,ww+8),min(h-y+4,hh+8)],'staff':staff_idx,'stage':hint,'status':'unreviewed'})
+    # Vertical line proposal pass: staff fragments removed from consideration; long near-vertical
+    # lines are barline candidates. Bounding boxes are not accepted without user confirmation.
+    vertical=cv2.morphologyEx(bw,cv2.MORPH_OPEN,cv2.getStructuringElement(cv2.MORPH_RECT,(1,max(12,int(np.median([s['spacing'] for s in staves]) * 3) if staves else 28))))
+    vn,_,vstats,_=cv2.connectedComponentsWithStats(vertical)
+    for j in range(1,vn):
+        x,y,ww,hh,area=map(int,vstats[j])
+        if not (2<=hh and ww<=max(7,w//150) and hh>=22):continue
+        idx=next((i for i,s in enumerate(staves) if y<=s['lines'][-1]+s['spacing'] and y+hh>=s['lines'][0]-s['spacing']),-1)
+        if idx<0:continue
+        if any(abs(c['box'][0]-x)<5 and abs(c['box'][1]-y)<8 for c in candidates):continue
+        candidates.append({'id':f'b{j}','box':[max(0,x-3),max(0,y-3),ww+6,hh+6],'staff':idx,'stage':'barlines','status':'unreviewed'})
     # Avoid hundreds of fragments from letters and page furniture; expose manual boxes.
-    candidates=sorted(candidates,key=lambda a:(a['staff'],a['box'][1],a['box'][0]))[:900]
+    candidates=sorted(candidates,key=lambda a:(a['staff']<0,a['box'][1],a['box'][0]))[:1400]
     return {'width':w,'height':h,'staves':staves,'candidates':candidates,'warning':'Detections are candidates, not a complete or correct musical transcription. Add missing symbols manually.'}
 
 def verify(events):
     if not isinstance(events,list) or len(events)>10000:raise ValueError('Invalid symbol event list')
     out=[]
     for index,e in enumerate(events):
-        if e.get('decision')=='ignore': continue
+        if e.get('decision')=='ignore' or e.get('label')=='text-letter': continue
         label=e.get('label')
         if label not in LABELS:raise ValueError(f'Symbol {index+1} needs a valid label')
         if label=='other':raise ValueError(f'Symbol {index+1} remains unresolved')

@@ -31,3 +31,9 @@ This is a manual-proofreading prototype, **not note-perfect automatic music reco
 pip install -r requirements.txt
 uvicorn app:app --host 127.0.0.1 --port 8000
 ```
+
+## Ordered chunk-by-chunk training (new)
+
+The import screen provides five mandatory sequential passes: **letters and repeated printed shapes**, **noteheads** (including breve and longa), **rests**, **barlines**, and **clefs**. Each candidate is displayed individually; you can identify it, exclude nonmusical text, or move it to another pass when the detector's initial guess is wrong. Matching letter crops can be labeled together on the same import. The learned shape labels remain in local browser storage; back them up with the JSON export button.
+
+**Limits:** The CV detector is a *candidate* generator. It does not detect all musical symbols and does not yet infer note pitches, voices, rhythmic onsets, or historical clef semantics automatically. The user must add missed candidates and enter/check event attributes for valid notation. Recognizing that two letter forms look the same does not prove their identity; matches are checked against a strict crop fingerprint. A full, trustworthy transcription still requires proofreading the original image. No GPT, Audiveris, paid Render disk, or paid database is needed. `render.yaml` does not hard-code the repository branch, so the Blueprint uses the repository's configured default branch.
