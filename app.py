@@ -18,18 +18,18 @@ def index():return (Path(__file__).parent/'static'/'index.html').read_text()
 
 @app.post('/api/import')
 async def import_files(files:list[UploadFile]=File(...)):
-    if not files or len(files)>20:raise HTTPException(400,'Upload 1–20 image/PDF files')
+    if not files or len(files)>12:raise HTTPException(400,'Upload 1–12 image/PDF files')
     images=[]
     for file in files:
         data=await file.read()
-        if len(data)>25_000_000:raise HTTPException(413,'Each file must be under 25 MB')
+        if len(data)>12_000_000:raise HTTPException(413,'Each file must be under 12 MB')
         try:images+=render_upload(data,file.filename or 'unknown')
         except Exception as e:raise HTTPException(400,str(e))
-    if len(images)>40:raise HTTPException(400,'Maximum 40 pages/images in one job')
+    if len(images)>12:raise HTTPException(400,'Maximum 12 pages/images in one job')
     pages=[]
     for page,image in enumerate(images):
         # shrink huge raster for practical browser review
-        if image.width>2000:image.thumbnail((2000,2800))
+        if image.width>1600 or image.height>2200:image.thumbnail((1600,2200))
         out=io.BytesIO();image.save(out,format='PNG')
         a=analyze(image)
         a.update({'page':page,'image':'data:image/png;base64,'+base64.b64encode(out.getvalue()).decode('ascii')})

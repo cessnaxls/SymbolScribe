@@ -1,6 +1,15 @@
+# SymbolScribe: one Render Free Python web service. No paid disks/databases.
 services:
   - type: web
-    name: symbolscribe-omr
-    runtime: docker
-    plan: starter
+    name: symbolscribe-omr-free
+    runtime: python
+    plan: free
+    branch: master
+    buildCommand: pip install --no-cache-dir -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: PYTHONUNBUFFERED
+        value: "1"

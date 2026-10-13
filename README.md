@@ -1,29 +1,33 @@
-# SymbolScribe OMR Studio
+# SymbolScribe OMR Studio - Render Free Blueprint
 
-Standalone human-trained PDF/image-to-MusicXML tool. Does **not** use Audiveris or an online GPT service. It recognizes **candidate** glyph regions, not entire scores reliably. User must identify symbols and enter timing/pitches manually. Breve (`breve`) and longa (`long`) are explicitly supported as MusicXML note types.
+This version deploys as a **native Python** web service on Render's **Free** plan.
+It does **not** use Docker, Node/npm, a paid persistent disk, Postgres, Audiveris, or a paid API.
 
-## Run
+## Deploy on Render - no payment required
 
-```bash
+1. Extract this ZIP. Upload its **contents directly to the root** of your GitHub `Score-Condenser` repository, replacing its existing files (especially `render.yaml`). The repository root must contain `app.py`, `engine.py`, `requirements.txt`, `static/`, and `render.yaml`.
+2. Commit the changes to branch `master`.
+3. In Render, choose **New > Blueprint**, connect the repository, select `master`, and let Render read the root `render.yaml`.
+4. Confirm the plan is **Free**. If Render presents a paid plan or asks for payment, **stop; don't approve it**. The Blueprint intentionally provisions only one free Python service.
+5. After deployment, open the provided `onrender.com` URL. `/health` should respond with `{"status":"ok"}`.
+
+Render free services may sleep when idle, have limited memory, and have monthly usage quotas. The app limits each import to 12 image/PDF pages and each file to 12 MB for better compatibility; large or complex pages can still exceed memory. The browser stores the symbol label library in localStorage; export backups regularly.
+
+## Features
+
+- Import PDF or multiple photos (PNG/JPG/WebP/TIFF).
+- Detect *candidate* shapes/staves, label or ignore every candidate, manually box missed symbols.
+- Label noteheads including **breve** and **longa**, enter staff/measure/beat/pitch details.
+- Remember labeled symbol crops **on your device/browser** with JSON backup/restore.
+- Preview basic staff notation in browser. Export MusicXML, compressed `.mxl`, and basic notation PDF.
+
+## Accuracy limitation
+
+This is a manual-proofreading prototype, **not note-perfect automatic music recognition**. Detector may miss symbols or present false detections; pitches, historical clefs, timing, meter and voice structure require manual verification. PDF engraving is basic and does not reproduce all notation accurately. No server-side uploads are retained.
+
+## Local run
+
+```sh
 pip install -r requirements.txt
 uvicorn app:app --host 127.0.0.1 --port 8000
 ```
-Open http://127.0.0.1:8000. Render: deploy this directory as a Docker web service (render.yaml included).
-
-## Workflow
-
-1. Upload a PDF or multiple photo files.
-2. Review orange candidate rectangles; select and identify each. Add missed symbols by drawing manual boxes.
-3. For note and rest symbols supply part/staff, measure, 0-based beat, and pitch (for notes). Confirmation optionally saves that **visual label** to browser `localStorage`.
-4. Preview the decoded note listing and download MXL, MusicXML, or PDF proof sheet.
-5. Back up your training memory regularly. The browser may delete stored data when site storage is cleared or the domain changes.
-
-## Limitations — read before relying on output
-
-- **This is an experimental proofing workstation**, not an accurate automatic OMR engine. Notehead splitting, historical glyphs, attached stems, text and accidental detection are incomplete. Candidate regions may be false positives or incomplete; there can be *hundreds* on a page.
-- Visually matched saved labels are only *suggested*. They do not determine a note's pitch, clef context, rhythmic position or duration, and users must confirm them before export.
-- MusicXML export uses user-entered staff, measure, pitch and time values. Default G clef is a placeholder and needs correction for bass/C clefs; time signatures and mensural duration interpretation are **not** reconstructed. Non-note labels are saved locally but are not attached to notes during MusicXML export. The PDF export and in-app preview offer **basic treble-clef staff drawings**, not full engraved scores. C clefs, bass clefs, mensural durations, ties, beams, key signatures, articulations, repeats and text are not faithfully typeset.
-- No server-side storage; uploads are held only for the import response. Files, imported images and labeled events remain in the browser tab; symbol visual labels are locally persisted.
-- Export is not a verification of the underlying printed score. Always proofread against the original.
-
-A complete, accurate symbol-graph solver and proper music engraving backend are subsequent development work; this build intentionally does not claim to have them.

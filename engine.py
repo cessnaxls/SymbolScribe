@@ -17,10 +17,10 @@ def render_upload(data, name):
     ext=name.lower().rsplit('.',1)[-1]
     if ext=='pdf':
         document=fitz.open(stream=data,filetype='pdf')
-        if len(document)>30: raise ValueError('Maximum 30 PDF pages per upload')
+        if len(document)>12: raise ValueError('Maximum 12 PDF pages per upload')
         images=[]
         for page in document:
-            pix=page.get_pixmap(matrix=fitz.Matrix(1.6,1.6),alpha=False)
+            pix=page.get_pixmap(matrix=fitz.Matrix(1.3,1.3),alpha=False)
             images.append(Image.open(io.BytesIO(pix.tobytes('png'))).convert('RGB'))
         return images
     if ext not in ('png','jpg','jpeg','webp','tif','tiff'): raise ValueError('Unsupported file type')
